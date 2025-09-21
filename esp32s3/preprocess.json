@@ -1,0 +1,45 @@
+{
+  "model_name": "esp32s3_ripple_classifier",
+  "input_features": [
+    "micRMS",
+    "lux",
+    "dT_tb",
+    "dTdt_mid",
+    "DOproxy",
+    "tds_delta"
+  ],
+  "classes": [
+    "calm",
+    "cold-shock",
+    "cooling-hot",
+    "disturbance",
+    "flashlight-night",
+    "glare",
+    "human-tap",
+    "manual-override",
+    "other",
+    "pump-self",
+    "tds-spike",
+    "uniform-overheat"
+  ],
+  "scale_shift": {
+    "scale": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "shift": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "input_dtype": "int8",
+  "quantized": true
+}

@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>UBi-Guardian Dashboard</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#151924; --muted:#8a93a6; --text:#e7ebf2;
+    --accent:#4ea1ff; --good:#16a34a; --bad:#dc3545; --grid:#20263a;
+    --lineO2:#4ea1ff; --lineRMS:#a78bfa; --lineLux:#22d3ee; --lineTDS:#f59e0b;
+    --shadow:0 10px 30px rgba(0,0,0,.35); --radius:16px; --chart-h:360px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,"Helvetica Neue",Arial}
+  a{color:var(--accent);text-decoration:none}
+  .wrap{max-width:1280px;margin:24px auto;padding:0 16px 64px}
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  header h1{font-size:22px;margin:0;letter-spacing:.2px}
+  header .right{display:flex;gap:8px;align-items:center}
+  .base-url{background:var(--card);border:1px solid #202534;border-radius:12px;padding:8px 10px;display:flex;gap:8px;align-items:center}
+  .base-url input{background:transparent;border:none;outline:none;color:var(--text);min-width:280px}
+  .btn{background:#1e2638;border:1px solid #27304a;color:var(--text);padding:8px 12px;border-radius:12px;cursor:pointer}
+  .btn:hover{filter:brightness(1.1)}
+  .bar{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 18px}
+  .ctl{background:var(--card);border:1px solid #202534;border-radius:12px;padding:8px 10px;display:flex;gap:8px;align-items:center}
+  .ctl label{font-size:12px;color:var(--muted)}
+  .ctl select,.ctl input{background:transparent;border:none;outline:none;color:var(--text);font-size:14px}
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}
+  .card{background:var(--card);border:1px solid #202534;border-radius:var(--radius);box-shadow:var(--shadow);padding:16px}
+  .card h3{margin:0 0 10px 0;font-size:16px;color:#cfd7ea}
+  .badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;border:1px solid transparent}
+  .ok{background:rgba(22,163,74,.15);color:var(--good);border-color:rgba(22,163,74,.35)}
+  .bad{background:rgba(220,53,69,.15);color:var(--bad);border-color:rgba(220,53,69,.35)}
+  .muted{color:var(--muted)}
+  .mini{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}
+  .stat{background:#111726;border:1px solid #1a2233;border-radius:14px;padding:12px}
+  .stat .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .stat .v{font-size:20px;margin-top:2px}
+  .charts .card{height:var(--chart-h);padding:12px 12px 8px}
+  .chart-wrap{position:relative;height:calc(var(--chart-h) - 60px);margin-top:6px}
+  canvas{width:100%;height:100%}
+  .tbl{width:100%;border-collapse:collapse;font-size:14px}
+  .tbl th,.tbl td{padding:8px 10px;border-bottom:1px solid #1f2534;white-space:nowrap}
+  .tbl th{font-weight:600;color:#cbd5ee;text-align:left}
+  .kv{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .kv .item{background:#111726;border:1px solid #1a2233;border-radius:12px;padding:10px}
+  .kv .k{font-size:12px;color:var(--muted)}
+  .kv .v{font-size:16px;margin-top:2px}
+  .footer{margin-top:18px;color:var(--muted);font-size:12px}
+  .alert-good{background:linear-gradient(135deg,rgba(8,123,67,.22),rgba(8,123,67,.08)),#111726!important;border-color:rgba(22,163,74,.45)!important}
+  .alert-bad{background:linear-gradient(135deg,rgba(173,49,62,.26),rgba(173,49,62,.10)),#111726!important;border-color:rgba(220,53,69,.55)!important}
+  @media (max-width:1100px){ .mini{grid-template-columns:repeat(3,1fr)} .kv{grid-template-columns:repeat(2,1fr)} :root{--chart-h:320px} }
+  @media (max-width:700px){ .mini{grid-template-columns:repeat(2,1fr)} .kv{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>UBi-Guardian — Dashboard</h1>
+    <div class="right">
+      <div class="base-url">
+        <span class="muted">Base</span>
+        <input id="baseUrl" placeholder="http://host:port (default: this origin)"/>
+        <button class="btn" id="saveBase">Save</button>
+      </div>
+      <button class="btn" id="btnTest">Send Test Alert</button>
+      <a class="btn" id="dlTele" href="/export.csv">Export CSV</a>
+      <a class="btn" id="dlEvents" href="/events.csv">Events CSV</a>
+    </div>
+  </header>
+
+  <div class="bar">
+    <div class="ctl">
+      <label>Range</label>
+      <select id="rangePreset">
+        <option value="15m">15 min</option>
+        <option value="1h">1 hour</option>
+        <option value="6h">6 hours</option>
+        <option value="12h">12 hours</option>
+        <option value="24h" selected>24 hours</option>
+        <option value="3d">3 days</option>
+        <option value="7d">7 days</option>
+        <option value="30d">30 days</option>
+        <option value="all">All</option>
+        <option value="custom">Custom…</option>
+      </select>
+    </div>
+    <div class="ctl">
+      <label>From</label>
+      <input type="datetime-local" id="rangeFrom">
+    </div>
+    <div class="ctl">
+      <label>To</label>
+      <input type="datetime-local" id="rangeTo">
+    </div>
+    <button class="btn" id="applyRange">Apply</button>
+    <div class="muted" id="rangeInfo"></div>
+  </div>
+
+  <div id="snapCard" class="card" style="grid-column:span 12;">
+    <div class="banner">
+      <h3 id="bannerTitle">System Snapshot</h3>
+      <div class="muted" id="sTime">—</div>
+    </div>
+    <div class="mini">
+      <div class="stat"><div class="k">Pump</div><div class="v" id="sPump">—</div></div>
+      <div class="stat" id="boxAlert"><div class="k">Alert</div><div class="v" id="sAlert">—</div></div>
+      <div class="stat"><div class="k">Context</div><div class="v" id="sCtx">—</div></div>
+      <div class="stat"><div class="k">Recommendation</div><div class="v" id="sRec">—</div></div>
+      <div class="stat"><div class="k">C* DO (mg/L)</div><div class="v" id="sDO">—</div></div>
+      <div class="stat"><div class="k">ΔT Top–Bot (°C)</div><div class="v" id="sDT">—</div></div>
+      <div class="stat"><div class="k">tTop (°C)</div><div class="v" id="sTTop">—</div></div>
+      <div class="stat"><div class="k">tMid (°C)</div><div class="v" id="sTMid">—</div></div>
+      <div class="stat"><div class="k">tBot (°C)</div><div class="v" id="sTBot">—</div></div>
+      <div class="stat"><div class="k">micRMS</div><div class="v" id="sRMS">—</div></div>
+      <div class="stat"><div class="k">ML</div><div class="v" id="sML">—</div></div>
+      <div class="stat"><div class="k">Pressure (hPa)</div><div class="v" id="sP">—</div></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="charts card" style="grid-column:span 6;">
+      <h3>C* DO (mg/L)</h3>
+      <div class="chart-wrap"><canvas id="cDo"></canvas></div>
+    </div>
+    <div class="charts card" style="grid-column:span 6;">
+      <h3>micRMS</h3>
+      <div class="chart-wrap"><canvas id="cRms"></canvas></div>
+    </div>
+    <div class="charts card" style="grid-column:span 6;">
+      <h3>Lux</h3>
+      <div class="chart-wrap"><canvas id="cLux"></canvas></div>
+    </div>
+    <div class="charts card" style="grid-column:span 6;">
+      <h3>TDS (mV)</h3>
+      <div class="chart-wrap"><canvas id="cTds"></canvas></div>
+    </div>
+
+    <div class="card" style="grid-column:span 12;">
+      <h3>All Sensors</h3>
+      <div class="kv" id="kvSensors"></div>
+    </div>
+
+    <div class="card" style="grid-column:span 12;">
+      <h3>Recent Events</h3>
+      <table class="tbl" id="evTable">
+        <thead>
+          <tr>
+            <th>Time</th><th>Alert</th><th>Reason</th><th>Context</th>
+            <th>Pump</th><th>Rec (ms)</th><th>DO*</th><th>tMid</th>
+            <th>ΔT</th><th>Lux</th><th>RMS</th><th>TDS</th><th>ML</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="footer">Designed By Edge Computing research team, Supervised By Dr. Atakan Aral</div>
+</div>
+
+<script>
+  const qs = s => document.querySelector(s);
+  const BASE_IN = qs('#baseUrl');
+  const SAVE = qs('#saveBase');
+  const BTN_TEST = qs('#btnTest');
+  const DL_TELE = qs('#dlTele');
+  const DL_EVENTS = qs('#dlEvents');
+  const BOX_ALERT = qs('#boxAlert');
+  const RANGE = qs('#rangePreset');
+  const R_FROM = qs('#rangeFrom');
+  const R_TO = qs('#rangeTo');
+  const R_APPLY = qs('#applyRange');
+  const R_INFO = qs('#rangeInfo');
+
+  function base(){ const v = BASE_IN.value.trim(); return v ? v.replace(/\/+$/,'') : location.origin; }
+  function url(p){ return base()+p; }
+  function fmtNum(x, d=2){ if(x===null||x===undefined||x==='') return '—'; const n=Number(x); if(Number.isNaN(n)) return String(x); return n.toFixed(d); }
+  function fmtInt(x){ if(x===null||x===undefined||x==='') return '—'; const n=parseInt(x,10); return Number.isFinite(n)? String(n): String(x); }
+  function yesNo(b){ return b ? 'true' : 'false'; }
+  function badge(txt, cls){ return `<span class="badge ${cls}">${txt}</span>`; }
+  function toDate(ts){ const n=Number(ts); return Number.isFinite(n)? new Date(n*1000): new Date(); }
+  function fmtTime(ts){ const d=toDate(ts); return d.toLocaleString(); }
+  function dtLocalStrFromEpoch(ts){ const d=toDate(ts); const z = new Date(d.getTime()-d.getTimezoneOffset()*60000); return z.toISOString().slice(0,16); }
+  function epochFromDtLocal(s){ if(!s) return undefined; return Math.floor(new Date(s).getTime()/1000); }
+
+  async function getJSON(p){ const r=await fetch(url(p),{cache:'no-store'}); if(!r.ok) throw new Error(r.status); return r.json(); }
+  async function getText(p){ const r=await fetch(url(p),{cache:'no-store'}); if(!r.ok) throw new Error(r.status); return r.text(); }
+
+  function parseCSV(text){
+    const lines = text.trim().split(/\r?\n/);
+    if(!lines.length) return [];
+    const headers = lines[0].split(',');
+    const out=[];
+    for(let i=1;i<lines.length;i++){
+      if(!lines[i]) continue;
+      const cols = lines[i].split(',');
+      const row={};
+      headers.forEach((h,idx)=>row[h]=cols[idx]!==undefined?cols[idx]:'');
+      out.push(row);
+    }
+    return out;
+  }
+
+  function coerceRow(r){
+    const n = k => r[k]!==undefined && r[k]!=='' ? Number(r[k]) : undefined;
+    const b = k => {
+      const v=(r[k]??'').toString().toLowerCase();
+      return v==='1'||v==='true'||v==='t'||v==='yes'||v==='y';
+    };
+    return {
+      ts:n('ts'), ms:n('ms'),
+      pump:b('pump'), manual_override:b('manual_override'),
+      alert:b('alert'), reason:r.reason||'none', context:r.context||'',
+      rec_ms:n('rec_ms')||0,
+      tTop:n('tTop'), tMid:n('tMid'), tBot:n('tBot'), dT_tb:n('dT_tb'),
+      pressure_hPa:n('pressure_hPa'), lux:n('lux'), irObj:n('irObj'), irAmb:n('irAmb'),
+      airT:n('airT'), airRH:n('airRH'), tds_mV:n('tds_mV'), tds_sat:b('tds_sat'),
+      micRMS:n('micRMS'), DOproxy:n('DOproxy'),
+      ml_on:b('ml_on'), ml_pred:r.ml_pred||'', ml_conf:n('ml_conf'), ml_used:b('ml_used')
+    };
+  }
+
+  let alertHoldUntil = 0;
+
+  function setSnapshot(p){
+    qs('#sPump').innerHTML = p.pump ? badge('ON','ok') : badge('OFF','muted');
+    const now = Date.now();
+    if (p.alert) alertHoldUntil = now + 5000;
+    const alertActive = p.alert || now < alertHoldUntil;
+    qs('#sAlert').innerHTML = alertActive ? badge('ALERT','bad') : badge('clear','ok');
+    BOX_ALERT.classList.toggle('alert-bad', alertActive);
+    BOX_ALERT.classList.toggle('alert-good', !alertActive);
+    qs('#bannerTitle').textContent = alertActive ? 'System Snapshot — ALERT ACTIVE' : 'System Snapshot — SAFE';
+    qs('#sCtx').textContent = p.context ?? 'n/a';
+    qs('#sRec').textContent = (p.rec_ms && p.rec_ms>0) ? `${p.rec_ms} ms (${p.reason||''})` : (p.reason||'—');
+    qs('#sDO').textContent = fmtNum(p.DOproxy,2);
+    qs('#sDT').textContent = fmtNum(p.dT_tb,2);
+    qs('#sTTop').textContent = fmtNum(p.tTop,2);
+    qs('#sTMid').textContent = fmtNum(p.tMid,2);
+    qs('#sTBot').textContent = fmtNum(p.tBot,2);
+    qs('#sRMS').textContent = fmtNum(p.micRMS,2);
+    qs('#sP').textContent = fmtNum(p.pressure_hPa,1);
+    const ml = (p.ml_on ? `${p.ml_pred||'n/a'} (${fmtNum(p.ml_conf,3)})` : 'off') + (p.ml_used? ' [used]':'');
+    qs('#sML').textContent = ml;
+    qs('#sTime').textContent = p.ts ? `Last update: ${fmtTime(p.ts)}` : 'Last update: —';
+    renderSensors(p);
+  }
+
+  function sensorKVs(p){
+    const kv = [
+      ['C* DO (mg/L)', fmtNum(p.DOproxy,2)],
+      ['tTop (°C)', fmtNum(p.tTop,2)],
+      ['tMid (°C)', fmtNum(p.tMid,2)],
+      ['tBot (°C)', fmtNum(p.tBot,2)],
+      ['ΔT Top–Bot (°C)', fmtNum(p.dT_tb,2)],
+      ['Pressure (hPa)', fmtNum(p.pressure_hPa,1)],
+      ['Lux', fmtNum(p.lux,1)],
+      ['IR Object (°C)', fmtNum(p.irObj,2)],
+      ['IR Ambient (°C)', fmtNum(p.irAmb,2)],
+      ['Air T (°C)', fmtNum(p.airT,1)],
+      ['Air RH (%)', fmtNum(p.airRH,0)],
+      ['TDS (mV)', fmtInt(p.tds_mV)],
+      ['TDS Saturated', yesNo(p.tds_sat)],
+      ['micRMS', fmtNum(p.micRMS,2)],
+      ['ML Enabled', yesNo(p.ml_on)],
+      ['ML Pred', (p.ml_on ? `${p.ml_pred||'n/a'} (${fmtNum(p.ml_conf,3)})` : 'off')],
+      ['ML Used', yesNo(p.ml_used)],
+      ['Pump', p.pump ? 'ON' : 'OFF'],
+      ['Manual Override', yesNo(p.manual_override)],
+      ['Context', p.context||''],
+      ['Recommendation (ms)', fmtInt(p.rec_ms)],
+      ['Reason', p.reason||'—']
+    ];
+    return kv;
+  }
+
+  function renderSensors(p){
+    const box = qs('#kvSensors'); box.innerHTML='';
+    for(const [k,v] of sensorKVs(p)){
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = `<div class="k">${k}</div><div class="v">${v}</div>`;
+      box.appendChild(div);
+    }
+  }
+
+  function pick(arr, key){
+    return arr.map(r=>{
+      const t = Number(r.ts||0), y = Number(r[key]);
+      return (Number.isFinite(t)&&Number.isFinite(y)) ? {t,y} : null;
+    }).filter(Boolean);
+  }
+
+  function downsample(series, maxN){
+    if(series.length<=maxN) return series;
+    const stride = Math.ceil(series.length/maxN);
+    const out=[]; for(let i=0;i<series.length;i+=stride) out.push(series[i]);
+    if(out[out.length-1]!==series[series.length-1]) out.push(series[series.length-1]);
+    return out;
+  }
+
+  function drawLine(canvas, series, color){
+    const ctx = canvas.getContext('2d');
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = w * devicePixelRatio; canvas.height = h * devicePixelRatio; ctx.scale(devicePixelRatio,devicePixelRatio);
+    ctx.clearRect(0,0,w,h);
+    if(!series.length){ ctx.fillStyle='#9aa3b7'; ctx.font='12px system-ui'; ctx.fillText('no data', 8, 16); return; }
+    const pad = {l:54,r:12,t:10,b:26};
+    const xs = series.map(s=>s.t), ys = series.map(s=>s.y);
+    const tmin = Math.min(...xs), tmax = Math.max(...xs);
+    let ymin = Math.min(...ys), ymax = Math.max(...ys);
+    if(ymin===ymax){ ymin-=1; ymax+=1; }
+    const X = s => pad.l + ((s.t - tmin)/(tmax - tmin || 1)) * (w - pad.l - pad.r);
+    const Y = s => pad.t + (1 - (s.y - ymin)/(ymax - ymin || 1)) * (h - pad.t - pad.b);
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--grid'); ctx.lineWidth=1;
+    ctx.beginPath();
+    for(let i=0;i<=5;i++){ const y=pad.t + (i/5)*(h-pad.t-pad.b); ctx.moveTo(pad.l,y); ctx.lineTo(w-pad.r,y); }
+    for(let i=0;i<=5;i++){ const x=pad.l + (i/5)*(w-pad.l-pad.r); ctx.moveTo(x,pad.t); ctx.lineTo(x,h-pad.b); }
+    ctx.stroke();
+    ctx.fillStyle='#aeb7cc'; ctx.font='12px system-ui';
+    for(let i=0;i<=5;i++){ const v=ymin+(i/5)*(ymax-ymin); const y=pad.t + (1-(i/5))*(h-pad.t-pad.b); ctx.fillText(v.toFixed(2), 6, y+4); }
+    const span = (tmax - tmin);
+    for(let i=0;i<=5;i++){ const tt=tmin+(i/5)*span; const d=new Date(tt*1000); const label=d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); const x=pad.l+(i/5)*(w-pad.l-pad.r); ctx.fillText(label, x-24, h-6); }
+    ctx.strokeStyle=color; ctx.lineWidth=2.3; ctx.beginPath();
+    series.forEach((s,i)=>{ const x=X(s), y=Y(s); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }); ctx.stroke();
+  }
+
+  let tele=[], events=[];
+  async function refreshSnapshot(){
+    try{
+      const p = await getJSON('/latest').catch(async ()=>{
+        const txt = await getText('/export.csv');
+        const rows = parseCSV(txt); const last = rows.length ? rows[rows.length-1] : null;
+        if(!last) throw new Error('no data'); return coerceRow(last);
+      });
+      setSnapshot(p);
+    }catch(e){
+      setSnapshot({pump:false,alert:false,context:'n/a',rec_ms:0,reason:'no data'});
+    }
+  }
+
+  async function refreshCSV(){
+    try{
+      const [tTxt,eTxt] = await Promise.all([ getText('/export.csv'), getText('/events.csv') ]);
+      const tRows = parseCSV(tTxt).map(coerceRow);
+      const eRows = parseCSV(eTxt).map(coerceRow);
+      tele = tRows;
+      events = eRows;
+      renderAllTimeFiltered();
+    }catch(e){
+      tele=[]; events=[];
+      renderAllTimeFiltered();
+    }
+  }
+
+  function currentRange(){
+    const mode = localStorage.getItem('ubi.range.mode') || 'preset';
+    if(mode==='custom'){
+      const fromStr = localStorage.getItem('ubi.range.from')||'';
+      const toStr = localStorage.getItem('ubi.range.to')||'';
+      const from = epochFromDtLocal(fromStr);
+      const to = epochFromDtLocal(toStr);
+      return {mode, from, to};
+    } else {
+      const preset = localStorage.getItem('ubi.range.preset') || '24h';
+      return {mode:'preset', preset};
+    }
+  }
+
+  function setRangeUI(){
+    const r = currentRange();
+    if(r.mode==='custom'){
+      RANGE.value = 'custom';
+      R_FROM.value = localStorage.getItem('ubi.range.from')||'';
+      R_TO.value = localStorage.getItem('ubi.range.to')||'';
+      R_INFO.textContent = `Custom range`;
+    } else {
+      RANGE.value = r.preset;
+      const now = Math.floor(Date.now()/1000);
+      const from = presetToFrom(r.preset, now);
+      if(from!==null){ R_FROM.value = dtLocalStrFromEpoch(from); R_TO.value = dtLocalStrFromEpoch(now); }
+      else { R_FROM.value=''; R_TO.value=''; }
+      R_INFO.textContent = r.preset==='all' ? 'Showing all data' : `Last ${r.preset}`;
+    }
+  }
+
+  function presetToFrom(preset, now){
+    const s = { '15m':900, '1h':3600, '6h':21600, '12h':43200, '24h':86400, '3d':259200, '7d':604800, '30d':2592000 };
+    if(preset==='all') return null;
+    return now - (s[preset]||86400);
+  }
+
+  function filterByRange(rows){
+    if(!rows.length) return [];
+    const r = currentRange();
+    if(r.mode==='custom'){
+      const from = r.from, to = r.to;
+      if(Number.isFinite(from) && Number.isFinite(to) && to>=from) return rows.filter(x=>Number.isFinite(x.ts) && x.ts>=from && x.ts<=to);
+      return rows;
+    } else {
+      const now = Math.floor(Date.now()/1000);
+      if(r.preset==='all') return rows;
+      const from = presetToFrom(r.preset, now);
+      return rows.filter(x=>Number.isFinite(x.ts) && x.ts>=from && x.ts<=now);
+    }
+  }
+
+  function renderAllTimeFiltered(){
+    const teleF = filterByRange(tele);
+    const evF = filterByRange(events);
+    const cDo = qs('#cDo'), cR = qs('#cRms'), cL = qs('#cLux'), cT = qs('#cTds');
+    const sDo = downsample(pick(teleF,'DOproxy'), 1200);
+    const sR  = downsample(pick(teleF,'micRMS'), 1200);
+    const sLx = downsample(pick(teleF,'lux'), 1200);
+    const sTd = downsample(pick(teleF,'tds_mV'), 1200);
+    const css = getComputedStyle(document.documentElement);
+    drawLine(cDo, sDo, css.getPropertyValue('--lineO2').trim()||'#4ea1ff');
+    drawLine(cR,  sR,  css.getPropertyValue('--lineRMS').trim()||'#a78bfa');
+    drawLine(cL,  sLx, css.getPropertyValue('--lineLux').trim()||'#22d3ee');
+    drawLine(cT,  sTd, css.getPropertyValue('--lineTDS').trim()||'#f59e0b');
+    renderEventsRange(evF);
+    updateRangeInfo(teleF);
+  }
+
+  function updateRangeInfo(rows){
+    if(!rows.length){ R_INFO.textContent = 'No data in range'; return; }
+    const first = rows[0].ts, last = rows[rows.length-1].ts;
+    R_INFO.textContent = `${fmtTime(first)} → ${fmtTime(last)} (${rows.length} pts)`;
+  }
+
+  function renderEventsRange(evRows){
+    const tb = qs('#evTable tbody'); tb.innerHTML='';
+    const rows = evRows.slice(-200).reverse();
+    for(const r of rows){
+      const ml = r.ml_on ? `${r.ml_pred||'n/a'} (${Number.isFinite(r.ml_conf)?r.ml_conf.toFixed(3):'—'})` : 'off';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${r.ts?fmtTime(r.ts):'—'}</td>
+        <td>${r.alert? '<span class="badge bad">true</span>':'<span class="badge ok">false</span>'}</td>
+        <td>${r.reason||'—'}</td>
+        <td>${r.context||'—'}</td>
+        <td>${r.pump? 'ON':'OFF'}</td>
+        <td>${r.rec_ms||0}</td>
+        <td>${Number.isFinite(r.DOproxy)?r.DOproxy.toFixed(2):'—'}</td>
+        <td>${Number.isFinite(r.tMid)?r.tMid.toFixed(2):'—'}</td>
+        <td>${Number.isFinite(r.dT_tb)?r.dT_tb.toFixed(2):'—'}</td>
+        <td>${Number.isFinite(r.lux)?r.lux.toFixed(1):'—'}</td>
+        <td>${Number.isFinite(r.micRMS)?r.micRMS.toFixed(2):'—'}</td>
+        <td>${Number.isFinite(r.tds_mV)?r.tds_mV.toFixed(0):'—'}</td>
+        <td>${ml}</td>`;
+      tb.appendChild(tr);
+    }
+  }
+
+  function applyBase(){
+    localStorage.setItem('ubi.base', BASE_IN.value.trim());
+    DL_TELE.href = url('/export.csv');
+    DL_EVENTS.href = url('/events.csv');
+    refreshSnapshot();
+    refreshCSV();
+  }
+
+  function savePreset(preset){
+    localStorage.setItem('ubi.range.mode','preset');
+    localStorage.setItem('ubi.range.preset', preset);
+    setRangeUI();
+    renderAllTimeFiltered();
+  }
+
+  function saveCustom(){
+    const f = R_FROM.value.trim(), t = R_TO.value.trim();
+    localStorage.setItem('ubi.range.mode','custom');
+    localStorage.setItem('ubi.range.from', f);
+    localStorage.setItem('ubi.range.to', t);
+    setRangeUI();
+    renderAllTimeFiltered();
+  }
+
+  BTN_TEST.addEventListener('click', async ()=>{ try{ await fetch(url('/alert/test'), {method:'POST'}); }catch(e){} });
+  SAVE.addEventListener('click', applyBase);
+  BASE_IN.addEventListener('keydown', e=>{ if(e.key==='Enter') applyBase(); });
+  window.addEventListener('resize', renderAllTimeFiltered);
+  RANGE.addEventListener('change', ()=>{
+    const v = RANGE.value;
+    if(v==='custom'){ localStorage.setItem('ubi.range.mode','custom'); }
+    else savePreset(v);
+  });
+  R_APPLY.addEventListener('click', saveCustom);
+
+  function init(){
+    const saved = localStorage.getItem('ubi.base')||''; BASE_IN.value = saved;
+    if(!localStorage.getItem('ubi.range.mode')){ localStorage.setItem('ubi.range.mode','preset'); localStorage.setItem('ubi.range.preset','24h'); }
+    setRangeUI();
+    applyBase();
+    setInterval(refreshSnapshot, 2000);
+    setInterval(()=>{ refreshCSV(); }, 15000);
+  }
+  init();
+</script>
+</body>
+</html>
