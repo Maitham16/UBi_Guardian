@@ -97,6 +97,9 @@ You now have:
   - `POST /collector?host=<RaspberryPi_IP>&port=5001&path=/ingest`  
     **Important:** point the device to your server’s IP/port/path so it can POST telemetry.
 
+example of our data ingest curl 
+    "http://ubiguard.local/collector?host=10.10.216.221&port=5001&path=/ingest"# UBi_Guardian
+
 The device posts once per second; JSON fields match the CSV headers listed below.
 
 ---
@@ -223,5 +226,3 @@ Open source for non-commercial research and conservation use.
 “UBi-Guardian” software © the project team.  
 
 Designed by the Edge Computing research team, supervised by Dr. Atakan Aral.
-
-example of our data ingest: curl "http://ubiguard.local/collector?host=10.10.216.221&port=5001&path=/ingest"# UBi_Guardian
