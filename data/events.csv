@@ -750,3 +750,6 @@ ts,ms,pump,manual_override,alert,reason,context,rec_ms,tTop,tMid,tBot,dT_tb,pres
 1758473886.6685572,882656,False,False,True,flashlight_night,night,0,25.56,25.56,25.56,0.0,990.2,128.7,27.17,26.69,26.5,54,477,False,0.0,7.98,True,calm,0.777,False
 1758473935.956801,930672,False,False,True,flashlight_night,night,0,25.62,25.62,25.56,0.06,990.2,128.4,27.15,26.69,26.5,54,479,False,0.0,7.97,True,calm,0.777,False
 1758473988.191814,984176,False,False,True,flashlight_night,night,0,25.56,25.62,25.56,0.0,990.2,128.3,27.17,26.73,26.5,56,485,False,0.0,7.97,True,calm,0.789,False
+1758491982.317804,318655,False,False,True,flashlight_night,night,0,25.5,25.5,25.44,0.06,989.7,133.8,26.27,25.91,25.6,58,470,False,0.0,7.98,True,calm,0.789,False
+1758493548.5515149,1884863,False,False,True,flashlight_night,night,0,25.37,25.5,25.44,-0.06,989.4,115.6,26.41,26.23,25.8,56,465,False,0.0,7.98,True,calm,0.934,False
+1758497209.138548,1953759,False,False,True,flashlight_night,night,0,25.44,25.5,25.44,0.0,989.0,115.0,26.59,26.27,25.9,56,485,False,0.0,7.98,True,calm,0.492,False
