@@ -98,7 +98,7 @@ You now have:
     **Important:** point the device to your server’s IP/port/path so it can POST telemetry.
 
 example of our data ingest curl 
-    "http://ubiguard.local/collector?host=10.10.216.221&port=5001&path=/ingest"# UBi_Guardian
+    "http://ubiguard.local/collector?host=10.10.216.221&port=5001&path=/ingest"
 
 The device posts once per second; JSON fields match the CSV headers listed below.
 
@@ -222,7 +222,9 @@ DS18B20 mapping:
 
 ## 10) License & attribution
 
-Open source for non-commercial research and conservation use.  
-“UBi-Guardian” software © the project team.  
+- **Code**: [Apache-2.0](./LICENSE)  
+- **Docs & media**: [CC BY-NC 4.0](./LICENSE-DOCS)
+
+Unless stated otherwise in a file header, source **code** is Apache-2.0; **documentation and images** are CC BY-NC 4.0.
 
 Designed by the Edge Computing research team, supervised by Dr. Atakan Aral.
