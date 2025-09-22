@@ -12,20 +12,21 @@ This repo contains all software pieces: ESP32 firmware, data collector, alerts, 
   esp32s3.ino                # main firmware (ESP32-S3, Arduino)
   model_data.h               # TFLite model as a C array (included by firmware)
   model_data.cpp             # separate TU
-/ml/
-  train_model.ipynb          # training model
   esp32s3_ripple_classifier.keras # model
   esp32s3_ripple_classifier.tflite # model
+/ml/
+  train_model.ipynb          # training model
+  data_preprocessing.py      # prepare data to train
 /server/
   main.py                    # FastAPI collector + CSV logging + Discord alerts
   data_preprocessing.py      # one time script
   Data_collector_phase_1.py  # early phase script for data collector
+  dashboard.html             # zero-dependency, opens in a browser
   data/                      # dataset
     telemetry.csv            # timeseries real recorded data
     events.csv               # alerts & pump recommendations
     telemetry.ndjson         # raw backup
-/dashboard/
-  dashboard.html             # zero-dependency, opens in a browser
+    training.csv             # train dataset
 ```
 
 ---
