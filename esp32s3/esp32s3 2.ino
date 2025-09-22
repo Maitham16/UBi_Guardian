@@ -15,12 +15,11 @@
 #include <Adafruit_VEML7700.h>
 #include <Adafruit_MLX90614.h>
 #include "driver/i2s.h"
-#include <memory>
 #include "model_data.h"
+#include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
-#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/schema/schema_generated.h"
-#include "tensorflow/lite/c/common.h"
+#include "tensorflow/lite/version.h"
 
 #define RELAY_PIN       15
 #define ONE_WIRE_PIN    6
@@ -86,7 +85,9 @@ const uint32_t TAP_MIN_MS        = 700UL;
 const uint32_t TAP_MAX_MS        = 2000UL;
 const uint32_t DISTURB_DWELL_MS  = 5000UL;
 const uint32_t LUX_WIN_SEC       = 5;
-const uint32_t SUDDEN_HOLD_MS    = 3000UL;
+const uint32_t SUDDEN_HOLD_MS    = 3000UL
+
+;
 
 struct Config {
   float do_lo=5.0, do_hi=7.0;
@@ -192,10 +193,10 @@ typedef uint8_t DeviceAddress[8];
 DeviceAddress addrTop, addrMid, addrBot;
 bool haveMap=false;
 
-alignas(16) static uint8_t tensor_arena[200 * 1024];
+constexpr int kTensorArenaSize = 25 * 1024;
+static uint8_t tensor_arena[kTensorArenaSize];
 const tflite::Model* tfl_model = nullptr;
-tflite::MicroMutableOpResolver<5> tfl_ops;
-
+tflite::AllOpsResolver tfl_ops;
 std::unique_ptr<tflite::MicroInterpreter> tfl;
 TfLiteTensor* tfl_in = nullptr;
 TfLiteTensor* tfl_out = nullptr;
@@ -205,11 +206,6 @@ const char* kClasses[] = {
   "tds-spike","uniform-overheat"
 };
 constexpr int kNumClasses = sizeof(kClasses)/sizeof(kClasses[0]);
-
-volatile int   ml_last_idx  = -1;
-volatile float ml_last_conf = 0.f;
-volatile bool  ml_used      = false;
-const char* label_from_idx(int i){ return (i>=0 && i<kNumClasses)? kClasses[i] : "n/a"; }
 
 String addrToHex(const DeviceAddress a){
   char hex[17]; for(int j=0;j<8;j++) sprintf(&hex[j*2], "%02X", a[j]); hex[16]=0; return String(hex);
@@ -339,12 +335,10 @@ String jnum(float v, int digits){ if (isnan(v)) return "null"; String s; s+=Stri
 String jbool(bool b){ return b ? "true" : "false"; }
 static inline uint16_t clamp_port(long v){ if(v<1) return 1; if(v>65535) return 65535; return (uint16_t)v; }
 static inline int      clamp_nonneg(long v){ return v<0 ? 0 : (int)v; }
-
 String htmlHeader() {
   return F("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>UBi-Guardian</title><style>body{font-family:system-ui;margin:20px}button,input,select{font-size:1rem;padding:8px} .card{border:1px solid #ddd;border-radius:12px;padding:16px;margin-bottom:12px}</style></head><body><h2>UBi-Guardian</h2>");
 }
 String htmlFooter() { return F("</body></html>"); }
-
 String statusPage(float tTop,float tMid,float tBot,float P_hPa,float lux,float irObj,float irAmb,float tds,bool tdsSAT,float rms,float doCstar,float airT,float airRH){
   String s = htmlHeader();
   s += "<div class='card'><h3>Status</h3>";
@@ -368,7 +362,6 @@ String statusPage(float tTop,float tMid,float tBot,float P_hPa,float lux,float i
   s += htmlFooter();
   return s;
 }
-
 String makeJSON(float tTop,float tMid,float tBot,float dT,float P_hPa,float lux,float irObj,float irAmb,float tds,bool tdsSAT,float rms,float doCstar, float airT, float airRH, bool alert, const String& reason, int rec_ms, const String& ctx){
   String j="{";
   j += "\"ms\":"+String(millis())+",";
@@ -391,15 +384,10 @@ String makeJSON(float tTop,float tMid,float tBot,float dT,float P_hPa,float lux,
   j += "\"tds_mV\":"+String(tds,0)+",";
   j += "\"tds_sat\":"+jbool(tdsSAT)+",";
   j += "\"micRMS\":"+jnum(rms,2)+",";
-  j += "\"DOproxy\":"+jnum(doCstar,2)+",";
-  j += "\"ml_on\":"+jbool(cfg.ml_gate)+",";
-  j += "\"ml_pred\":\""+String(label_from_idx(ml_last_idx))+"\",";
-  j += "\"ml_conf\":"+String(ml_last_conf,3)+",";
-  j += "\"ml_used\":"+jbool(ml_used);
+  j += "\"DOproxy\":"+jnum(doCstar,2);
   j += "}";
   return j;
 }
-
 String portalPage() {
   int n = WiFi.scanNetworks();
   String opts;
@@ -419,7 +407,6 @@ String portalPage() {
   s += htmlFooter();
   return s;
 }
-
 void startAP(){
   apMode = true;
   WiFi.mode(WIFI_AP);
@@ -498,9 +485,10 @@ void ensurePortalIfDisconnected(){
 IPAddress defaultCollectorIP(){ return WiFi.gatewayIP(); }
 bool postTelemetry(const String& body){
   if (WiFi.status()!=WL_CONNECTED) return false;
-  // Backward-compatible: if collHost is empty, use gateway IP; if not, use it directly (works for IP or DNS hostname)
-  String host = collHost.length() ? collHost : defaultCollectorIP().toString();
-  String url = "http://" + host + ":" + String(collPort) + collPath;
+  IPAddress ip;
+  if (collHost.length()) ip.fromString(collHost);
+  else ip = defaultCollectorIP();
+  String url = "http://" + ip.toString() + ":" + String(collPort) + collPath;
   HTTPClient http;
   http.begin(url);
   http.addHeader("Content-Type","application/json");
@@ -517,20 +505,8 @@ String dsMapJSON(){
   s += "}";
   return s;
 }
-
 void startHTTP_STA(){
   server.on("/health", [](){ server.send(200,"text/plain","OK"); });
-
-  server.on("/ml", [](){
-    String j="{";
-    j += "\"ml_on\":"+jbool(cfg.ml_gate)+",";
-    j += "\"pred\":\""+String(label_from_idx(ml_last_idx))+"\",";
-    j += "\"conf\":"+String(ml_last_conf,3)+",";
-    j += "\"used\":"+jbool(ml_used);
-    j += "}";
-    server.send(200,"application/json", j);
-  });
-
   server.on("/sensors", [](){
     ds18b20.requestTemperatures();
     float tTop = readTempRole(addrTop,0);
@@ -540,26 +516,21 @@ void startHTTP_STA(){
     if (tMid==85.0||tMid<=-100) tMid=NAN;
     if (tBot==85.0||tBot<=-100) tBot=NAN;
     float dT_tb = (isnan(tTop)||isnan(tBot)) ? NAN : (tTop - tBot);
-
     float P_hPa = (bmpOK && i2cPresent(0x77)) ? (bmp.readPressure()/100.0f) : NAN;
     float lux = (vemlOK && i2cPresent(0x10)) ? veml.readLux() : NAN;
     float irObj=NAN, irAmb=NAN;
     i2cTry(0x5A, [&](){ irObj=mlx.readObjectTempC(); irAmb=mlx.readAmbientTempC(); return !(isnan(irObj)||isnan(irAmb)); });
     float airT=NAN, airRH=NAN;
     i2cTry(0x38, [&](){ sensors_event_t hum, temp; if(!aht.getEvent(&hum,&temp)) return false; airT=temp.temperature; airRH=hum.relative_humidity; return true; });
-
     bool tdsSAT=false; 
     float tds=tds_mV(tdsSAT);
     float rms = i2sOK ? micRMS() : NAN;
-
     float P_eff = isnan(P_hPa) ? 1013.25f : P_hPa;
     float doCstar = (!isnan(tMid)) ? o2sat_mgL_local(tMid, P_eff) : NAN;
-
     server.send(200,"application/json",
       makeJSON(tTop,tMid,tBot,dT_tb,P_hPa,lux,irObj,irAmb,tds,tdsSAT,rms,doCstar, airT, airRH,
                cur_alert, cur_reason, pump_active?(int)(pump_off_at>millis()? (pump_off_at-millis()):0):0, cur_ctx));
   });
-
   server.on("/collector", [](){
     if(server.hasArg("host")) collHost = server.arg("host");
     if(server.hasArg("port")) collPort = clamp_port(server.arg("port").toInt());
@@ -571,7 +542,6 @@ void startHTTP_STA(){
     prefs.end();
     server.send(200,"text/plain","OK");
   });
-
   server.on("/caps", [](){
     String j = "{";
     j += "\"duty_ms_hour\":"+String(duty_ms_hour)+",";
@@ -579,11 +549,10 @@ void startHTTP_STA(){
     j += "\"cap_hour_ms\":"+String(cfg.cap_hour_ms)+",";
     j += "\"duty_ms_night\":"+String(duty_ms_night)+",";
     j += "\"cap_night_ms\":"+String(cfg.cap_night_ms)+",";
-    j += "\"isNight\":"+(was_dark?String("true"):String("false"));
+    j += "\"isNight\":"+String((was_dark?"true":"false"));
     j += "}";
     server.send(200,"application/json", j);
   });
-
   server.on("/pump", [](){
     bool on = server.hasArg("on") ? (server.arg("on")=="1") : false;
     int sec = server.hasArg("sec") ? clamp_nonneg(server.arg("sec").toInt()) : 0;
@@ -597,7 +566,6 @@ void startHTTP_STA(){
       server.send(200,"text/plain","OFF");
     }
   });
-
   server.on("/dsmap", [](){ server.send(200,"application/json", dsMapJSON()); });
   server.on("/dsmap/reset", [](){ prefs.begin("dsmap", false); prefs.clear(); prefs.end(); haveMap=false; server.send(200,"text/plain","OK"); });
   server.on("/dsmap/byindex", [](){
@@ -627,7 +595,6 @@ void startHTTP_STA(){
     persistDSMap(); haveMap=true;
     server.send(200,"application/json", dsMapJSON());
   });
-
   server.on("/config/get", [](){ server.send(200,"application/json", cfgJSON()); });
   server.on("/config/reset", [](){ prefs.begin("cfg", false); prefs.clear(); prefs.end(); cfg = Config(); cfgSave(); server.send(200,"text/plain","OK"); });
   server.on("/config/set", [](){
@@ -655,7 +622,6 @@ void startHTTP_STA(){
       server.send(200,"application/json", cfgJSON());
     } else server.send(400,"text/plain","need key & val");
   });
-
   server.on("/", [](){
     ds18b20.requestTemperatures();
     float tTop = readTempRole(addrTop,0);
@@ -664,7 +630,6 @@ void startHTTP_STA(){
     if (tTop==85.0||tTop<=-100) tTop=NAN;
     if (tMid==85.0||tMid<=-100) tMid=NAN;
     if (tBot==85.0||tBot<=-100) tBot=NAN;
-
     float P_hPa = (bmpOK && i2cPresent(0x77)) ? (bmp.readPressure()/100.0f) : NAN;
     float lux   = (vemlOK && i2cPresent(0x10)) ? veml.readLux() : NAN;
     float irObj=NAN, irAmb=NAN;
@@ -675,14 +640,11 @@ void startHTTP_STA(){
     float rms = i2sOK ? micRMS() : NAN;
     float P_eff = isnan(P_hPa) ? 1013.25f : P_hPa;
     float doCstar = (!isnan(tMid)) ? o2sat_mgL_local(tMid, P_eff) : NAN;
-
     server.send(200,"text/html", statusPage(tTop,tMid,tBot,P_hPa,lux,irObj,irAmb,tds,tdsSAT,rms,doCstar, airT, airRH));
   });
-
   server.begin();
   Serial.println("[HTTP] Server started (STA mode).");
 }
-
 void lux_push(unsigned long now_ms, float lux){
   luxbuf[lhead] = { now_ms, lux };
   lhead = (lhead+1) % (LUX_WIN_SEC+1);
@@ -704,7 +666,6 @@ bool lux_change_ratio(unsigned long window_ms, float &ratio_up, float &ratio_dow
   ratio_down = down;
   return true;
 }
-
 void pbuf_push(unsigned long now_ms, float p_hPa){
   unsigned long minute_mark = now_ms / 60000UL;
   if (minute_mark == last_pbuf_min_mark) return;
@@ -732,34 +693,12 @@ unsigned long lastTick=0;
 
 static inline float nz(float v){ return isnan(v)?0.f:v; }
 bool ml_predict(float rms, float lux, float dT_tb, float dTdt_mid, float doCstar, float tds_delta, int &pred_idx, float &pred_score){
-  if (!tfl || !tfl_in || !tfl_out) return false;
-  float feats[6] = { nz(rms), nz(lux), nz(dT_tb), nz(dTdt_mid), nz(doCstar), nz(tds_delta) };
-  if (tfl_in->type == kTfLiteFloat32){
-    for(int i=0;i<6;i++) tfl_in->data.f[i] = feats[i];
-  } else if (tfl_in->type == kTfLiteUInt8){
-    float s = tfl_in->params.scale; int zp = tfl_in->params.zero_point;
-    for(int i=0;i<6;i++){ int v = (int)lrintf(feats[i]/s + zp); if(v<0)v=0; if(v>255)v=255; tfl_in->data.uint8[i] = (uint8_t)v; }
-  } else if (tfl_in->type == kTfLiteInt8){
-    float s = tfl_in->params.scale; int zp = tfl_in->params.zero_point;
-    for(int i=0;i<6;i++){ int v = (int)lrintf(feats[i]/s + zp); if(v<-128)v=-128; if(v>127)v=127; tfl_in->data.int8[i] = (int8_t)v; }
-  } else {
-    return false;
-  }
+  if (!tfl) return false;
+  float* x = tfl_in->data.f;
+  x[0]=nz(rms); x[1]=nz(lux); x[2]=nz(dT_tb); x[3]=nz(dTdt_mid); x[4]=nz(doCstar); x[5]=nz(tds_delta);
   if (tfl->Invoke() != kTfLiteOk) return false;
-  float scores[kNumClasses];
-  if (tfl_out->type == kTfLiteFloat32){
-    for(int i=0;i<kNumClasses;i++) scores[i] = tfl_out->data.f[i];
-  } else if (tfl_out->type == kTfLiteUInt8){
-    float s = tfl_out->params.scale; int zp = tfl_out->params.zero_point;
-    for(int i=0;i<kNumClasses;i++) scores[i] = (tfl_out->data.uint8[i] - zp) * s;
-  } else if (tfl_out->type == kTfLiteInt8){
-    float s = tfl_out->params.scale; int zp = tfl_out->params.zero_point;
-    for(int i=0;i<kNumClasses;i++) scores[i] = (tfl_out->data.int8[i] - zp) * s;
-  } else {
-    return false;
-  }
-  pred_idx = 0; pred_score = scores[0];
-  for(int i=1;i<kNumClasses;i++){ if(scores[i] > pred_score){ pred_score = scores[i]; pred_idx = i; } }
+  pred_idx = 0; pred_score = tfl_out->data.f[0];
+  for(int i=1;i<kNumClasses;i++){ float v=tfl_out->data.f[i]; if(v>pred_score){ pred_score=v; pred_idx=i; } }
   return true;
 }
 
@@ -772,7 +711,6 @@ void setup(){
   Wire.setClock(50000);
   Wire.setTimeOut(200);
   ds18b20.begin();
-
   prefs.begin("dsmap", true);
   String sTop = prefs.getString("top",  "");
   String sMid = prefs.getString("mid",  "");
@@ -784,37 +722,26 @@ void setup(){
     if (haveMap){ memcpy(addrTop,at,8); memcpy(addrMid,am,8); memcpy(addrBot,ab,8); persistDSMap(); }
   }
   initOrPersistDSMap();
-
   bmpOK  = bmp.begin();
   ahtOK  = aht.begin();
   vemlOK = veml.begin();
   mlxOK  = mlx.begin();
   i2sOK  = i2sInit();
   if (vemlOK){ veml.setGain(VEML7700_GAIN_1); veml.setIntegrationTime(VEML7700_IT_100MS); }
-
   prefs.begin("collector", true);
   String h=prefs.getString("host","");
   uint16_t p=prefs.getUShort("port",5001);
   String pa=prefs.getString("path","/ingest");
   prefs.end();
   if(h.length()) collHost=h; collPort=p; collPath=pa;
-
   Serial.println(F("UBi-Guardian"));
   Serial.println(F("Serial: 's' 3s ON, 'l' 10s ON, 'x' OFF"));
-
   if (!connectSTA_fromPrefs()) startAP(); else startHTTP_STA();
-
   bl_start_ms = millis();
   hour_window_start_ms = millis();
-
-  tfl_ops.AddFullyConnected();
-  tfl_ops.AddReshape();
-  tfl_ops.AddSoftmax();
-  tfl_ops.AddQuantize();
-  tfl_ops.AddDequantize();
-
-  tfl_model = tflite::GetModel(esp32s3_ripple_classifier_tflite);
-  tfl = std::make_unique<tflite::MicroInterpreter>(tfl_model, tfl_ops, tensor_arena, sizeof(tensor_arena));
+  tfl_model = tflite::GetModel(ripple_classifier_tflite);
+  if (tfl_model->version() != TFLITE_SCHEMA_VERSION) { Serial.println("[ML] schema mismatch"); }
+  tfl = std::make_unique<tflite::MicroInterpreter>(tfl_model, tfl_ops, tensor_arena, kTensorArenaSize);
   if (tfl->AllocateTensors() != kTfLiteOk) { Serial.println("[ML] alloc fail"); }
   tfl_in  = tfl->input(0);
   tfl_out = tfl->output(0);
@@ -827,13 +754,11 @@ void loop(){
     else if (c=='l'){ pumpOn(); pump_active=true; manual_override=true; pump_on_at=millis(); pump_off_at=millis()+10000UL; Serial.println(F("[MANUAL] Long burst (10s)")); }
     else if (c=='x'){ pumpOff(); pump_active=false; manual_override=false; pump_off_at=0; Serial.println(F("[MANUAL] Pump OFF")); }
   }
-
   if (pump_active && pump_off_at!=0 && (long)(millis()-pump_off_at) >= 0){
     pumpOff(); pump_active=false; pump_off_at=0; manual_override=false;
     disturb_since=0; tds_since=0; abrupt_dark_since=0;
     Serial.println(F("[PUMP] Auto OFF"));
   }
-
   if (apMode){ dns.processNextRequest(); server.handleClient(); }
   else {
     server.handleClient();
@@ -843,10 +768,8 @@ void loop(){
       if (apMode){ server.stop(); MDNS.end(); }
     }
   }
-
   if (millis()-lastTick >= 1000){
     lastTick = millis();
-
     ds18b20.requestTemperatures();
     float tTop = readTempRole(addrTop,0);
     float tMid = readTempRole(addrMid,1);
@@ -855,7 +778,6 @@ void loop(){
     if (tMid==85.0 || tMid<=-100) tMid=NAN;
     if (tBot==85.0 || tBot<=-100) tBot=NAN;
     float dT_tb = (isnan(tTop)||isnan(tBot)) ? NAN : (tTop - tBot);
-
     mid_hist[mid_idx]=tMid; mid_idx=(mid_idx+1)%SLOPE_WIN; if(mid_cnt<SLOPE_WIN) mid_cnt++;
     bool cold_shock=false;
     float dTdt_mid=NAN;
@@ -865,39 +787,29 @@ void loop(){
       cold_shock = (!isnan(d) && d <= DT60_COLD);
       dTdt_mid = d;
     }
-
     bool strat_now = (!isnan(dT_tb) && dT_tb > cfg.dt_strat);
     bool inv_now   = (!isnan(dT_tb) && dT_tb < cfg.dt_inv);
     if (strat_now){ if (strat_since==0) strat_since=millis(); } else strat_since=0;
     if (inv_now){ if (inv_since==0)   inv_since=millis(); }   else inv_since=0;
     bool stratified = (strat_since>0 && (millis()-strat_since)>=STRAT_DWELL_MS);
     bool inversion  = (inv_since>0   && (millis()-inv_since)  >=STRAT_DWELL_MS);
-
     float P_hPa = NAN;
     if (bmpOK && i2cPresent(0x77)) { P_hPa = bmp.readPressure()/100.0f; }
     float P_eff = isnan(P_hPa) ? 1013.25f : P_hPa;
     if (!isnan(P_eff)) pbuf_push(millis(), P_eff);
-
     float lux = NAN;
     if (vemlOK && i2cPresent(0x10)) { lux = veml.readLux(); }
-
     float irObj=NAN, irAmb=NAN;
     i2cTry(0x5A, [&](){ irObj=mlx.readObjectTempC(); irAmb=mlx.readAmbientTempC(); return !(isnan(irObj)||isnan(irAmb)); });
-
     float airT=NAN, airRH=NAN;
     i2cTry(0x38, [&](){ sensors_event_t hum, temp; if(!aht.getEvent(&hum,&temp)) return false; airT=temp.temperature; airRH=hum.relative_humidity; return true; });
-
     bool tdsSAT = false;
     float tds   = tds_mV(tdsSAT);
     float rms   = i2sOK ? micRMS() : NAN;
-
     if (!isnan(rms) && rms < 5.0f) rms = 0.0f;
-
     float doCstar = (!isnan(tMid)) ? o2sat_mgL_local(tMid, P_eff) : NAN;
-
     float calm_thr_cur = (bl_ready && rms_base > 0) ? (RMS_MULT * rms_base) : 5.0f;
     bool  calm_now     = (!isnan(rms) && rms < calm_thr_cur);
-
     if (!pump_active && calm_now){
       if (!bl_ready && millis() - bl_start_ms > 10000) bl_ready = true;
       float alpha = bl_ready ? 0.01f : 0.2f;
@@ -909,13 +821,11 @@ void loop(){
       if (!isnan(P_hPa)) p_ref   = (1 - 0.001f) * p_ref + 0.001f * P_hPa;
       if (!isnan(tds))   tds_base = (1 - alpha) * tds_base + alpha * tds;
     }
-
     float day_on_lux = cfg.night_lux * max(2.0f, cfg.day_on_factor);
     bool was_day = is_day;
     if (!is_day && !isnan(lux) && lux > day_on_lux) { is_day = true; day_switch_ms = millis(); }
     if ( is_day && !isnan(lux) && lux < cfg.night_lux) { is_day = false; day_switch_ms = millis(); }
     bool in_sunrise_grace = (!isnan(lux) && is_day && (millis()-day_switch_ms) < cfg.sunrise_grace_ms);
-
     lux_push(millis(), isnan(lux)?0.0f:lux);
     float ratio_up=1.0f, ratio_down=1.0f;
     lux_change_ratio(cfg.sudden_window_ms, ratio_up, ratio_down);
@@ -927,11 +837,9 @@ void loop(){
       abrupt_dark_since=0;
     }
     bool day_abrupt_dark = (abrupt_dark_since>0 && (millis()-abrupt_dark_since)>=SUDDEN_HOLD_MS);
-
     float calm_thr = (bl_ready && rms_base>0) ? (RMS_MULT * rms_base) : 5.0f;
     bool calm = (!isnan(rms) && rms < calm_thr);
     bool dark = (!isnan(lux) && lux < cfg.night_lux);
-
     if ((millis() - hour_window_start_ms) >= HOUR_WINDOW_MS) {
       unsigned long over = (millis() - hour_window_start_ms) % HOUR_WINDOW_MS;
       hour_window_start_ms = millis() - over;
@@ -951,22 +859,14 @@ void loop(){
         }
       }
     }
-
-    bool tds_spike_now = (bl_ready && !isnan(tds) &&
-                          ( (tds - tds_base) > max(TDS_JUMP_ABS_MV, TDS_JUMP_FRAC*tds_base) ));
+    bool tds_spike_now = (bl_ready && !isnan(tds) && ( (tds - tds_base) > max(TDS_JUMP_ABS_MV, TDS_JUMP_FRAC*tds_base) ));
     if (tds_spike_now){ if (tds_since==0) tds_since=millis(); } else tds_since=0;
     bool tds_spike = (tds_since>0 && (millis()-tds_since)>=TDS_DWELL_MS);
-
     float drop3h=0; bool have3h = pbuf_drop_over_3h(P_eff, drop3h);
     bool baro_drop = (have3h && drop3h >= P_DROP_HPA && !isnan(tMid) && tMid >= 20.0f);
-
-    bool heater_lamp = (!isnan(lux) && lux>cfg.glare_lux) &&
-                       ( (!isnan(irObj) && !isnan(irAmb) && (irObj - irAmb) >= IR_DELTA_HOT) ||
-                         (!isnan(irObj) && irObj >= IR_ABS_HOT) );
-
+    bool heater_lamp = (!isnan(lux) && lux>cfg.glare_lux) && ( (!isnan(irObj) && !isnan(irAmb) && (irObj - irAmb) >= IR_DELTA_HOT) || (!isnan(irObj) && irObj >= IR_ABS_HOT) );
     bool flashlight_suspicious = night_flashlight && !in_sunrise_grace;
     bool abrupt_dark_hazard    = day_abrupt_dark;
-
     bool within_self_mask = pump_active && (millis() - pump_on_at) < PUMP_SELF_MASK_MS;
     bool ripple_now = (!isnan(rms) && !isnan(calm_thr) && (rms >= calm_thr)) && !within_self_mask;
     if (ripple_now){
@@ -980,9 +880,7 @@ void loop(){
       if (!pump_active && dur >= TAP_MIN_MS && dur <= TAP_MAX_MS) human_tap = true;
       if (dur >= DISTURB_DWELL_MS) disturbance = true;
     }
-
     bool overheat_un = (!isnan(tMid)  && tMid > cfg.overheat_un && (!isnan(dT_tb) && fabs(dT_tb) < 0.3f));
-
     bool critical_nan = (isnan(tTop) || isnan(tMid) || isnan(tBot));
     if (critical_nan) fault_cnt++; else fault_cnt=0;
     bool sensor_fault = (fault_cnt >= SENSOR_FAULT_SEC);
@@ -990,11 +888,6 @@ void loop(){
     int ml_cls=-1; float ml_conf=0.f; bool ml_ok=false;
     float tds_delta = (bl_ready && !isnan(tds)) ? (tds - tds_base) : 0.f;
     if (cfg.ml_gate && tfl && tfl_in && tfl_out){
-      bool used=false;
-      bool ripple_before = ripple_now;
-      bool tap_before    = human_tap;
-      bool flash_before  = flashlight_suspicious;
-
       ml_ok = ml_predict(rms, lux, dT_tb, dTdt_mid, doCstar, tds_delta, ml_cls, ml_conf);
       if (ml_ok){
         const char* c = kClasses[ml_cls];
@@ -1003,26 +896,19 @@ void loop(){
         bool is_tap  = (strcmp(c,"human-tap")==0 && ml_conf>=0.6f);
         bool is_flash= (strcmp(c,"flashlight-night")==0 && ml_conf>=0.6f);
         bool is_pump = (strcmp(c,"pump-self")==0 && ml_conf>=0.6f);
-
-        if (is_calm){ used |= ripple_before; ripple_now=false; disturb_since=0; }
-        if (is_dist){ if (!ripple_before){ used=true; } ripple_now=true; if (disturb_since==0) disturb_since=millis(); }
-        if (is_tap){  if (!tap_before){ used=true; } human_tap=true; }
-        if (is_flash){ if (!flash_before){ used=true; } flashlight_suspicious = flashlight_suspicious || (!is_day); }
-        if (is_pump){ used |= (ripple_before || tap_before || flash_before); ripple_now=false; human_tap=false; disturbance=false; disturb_since=0; }
-
-        ml_last_idx  = ml_cls;
-        ml_last_conf = ml_conf;
-        ml_used      = used;
+        if (is_calm){ ripple_now=false; disturb_since=0; }
+        if (is_dist){ ripple_now=true; if (disturb_since==0) disturb_since=millis(); }
+        if (is_tap){ human_tap=true; }
+        if (is_flash){ flashlight_suspicious = flashlight_suspicious || (!is_day); }
+        if (is_pump){ ripple_now=false; human_tap=false; disturbance=false; disturb_since=0; }
       }
     }
 
     bool alert=false; bool pump_help=false; int rec_ms=0; String reason="none";
     String ctx = String(is_day ? "day" : "night");
-
     bool blockers_present =
         sensor_fault || heater_lamp || flashlight_suspicious || abrupt_dark_hazard ||
         tds_spike || cold_shock || human_tap || disturbance;
-
     if (sensor_fault){ alert=true; reason="safe_hold_sensor"; }
     if (flashlight_suspicious){ alert=true; if(reason=="none") reason="flashlight_night"; }
     if (abrupt_dark_hazard){   alert=true; if(reason=="none") reason="abrupt_dark_day"; }
@@ -1030,7 +916,6 @@ void loop(){
     if (tds_spike){            alert=true; if(reason=="none") reason="tds_spike"; }
     if (cold_shock){           alert=true; if(reason=="none") reason="cold_shock"; }
     if (overheat_un){                          if(reason=="none") reason="uniform_overheat"; }
-
     if (reason=="none" && human_tap)     reason="human_tap";
     if (reason=="none" && disturbance)   reason="disturbance";
 
@@ -1041,7 +926,6 @@ void loop(){
         if (reason=="none") reason = "cooling_hot"; else reason += "_cooling";
       }
     }
-
     if (!manual_override && !blockers_present){
       if (stratified || inversion){
         pump_help=true; rec_ms=max(rec_ms, 180000);
@@ -1053,17 +937,14 @@ void loop(){
       if (baro_drop && (!isnan(doCstar) && doCstar <= cfg.do_hi)){
         pump_help=true; rec_ms=max(rec_ms, 10000); reason=(reason=="none")? "baro_drop":(reason+"_baro");
       }
-
       bool mild = (!isnan(doCstar) && doCstar > cfg.do_lo && doCstar <= cfg.do_hi);
       if (dark && calm && !pump_active && mild && (millis()-last_gentle_ms)>=GENTLE_COOLDOWN){
         pump_help=true; rec_ms=max(rec_ms, (int)(GENTLE_SEC*1000UL)); if (reason=="none") reason="night_mild";
       }
     }
-
     if (!isnan(tMid) && tMid <= cfg.cool_off_c){
       if (pump_help && rec_ms == (int)cfg.cool_burst_ms) { pump_help = false; rec_ms = 0; }
     }
-
     if (!manual_override && pump_help && rec_ms>0){
       bool hour_cap_exhausted  = (duty_ms_hour >= cfg.cap_hour_ms);
       bool night_cap_exhausted = (was_dark && (duty_ms_night >= cfg.cap_night_ms));
@@ -1073,7 +954,6 @@ void loop(){
         pump_help = false; rec_ms = 0;
       }
     }
-
     if (!manual_override){
       if (blockers_present && pump_active){
         bool min_elapsed = ((millis()-pump_on_at) >= MIN_ON_MS);
@@ -1096,12 +976,9 @@ void loop(){
         }
       }
     }
-
-    cur_alert  = sensor_fault || heater_lamp || flashlight_suspicious ||
-                 abrupt_dark_hazard || tds_spike || cold_shock || overheat_un;
+    cur_alert  = sensor_fault || heater_lamp || flashlight_suspicious || abrupt_dark_hazard || tds_spike || cold_shock || overheat_un;
     cur_reason = (cur_alert ? reason : (pump_help ? reason : (human_tap ? "human_tap" : (disturbance ? "disturbance" : "none"))));
     cur_ctx    = String(is_day ? "day" : "night");
-
     if(pushEnabled && WiFi.status()==WL_CONNECTED){
       int rec = pump_active ? (int)(pump_off_at>millis()? (pump_off_at-millis()):0) : (pump_help?rec_ms:0);
       String body = makeJSON(tTop,tMid,tBot,dT_tb,P_hPa,lux,irObj,irAmb,tds,tdsSAT,rms,doCstar, airT, airRH, cur_alert, cur_reason, rec, cur_ctx);
