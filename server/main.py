@@ -1,8 +1,8 @@
 import requests
 from pathlib import Path
-import csv, time, json, hashlib
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Deque, List
 from fastapi import FastAPI, Request, BackgroundTasks
+import csv, time, json, hashlib, statistics, collections
 from fastapi.responses import PlainTextResponse, JSONResponse, FileResponse
 
 DATA_DIR = Path("data"); DATA_DIR.mkdir(exist_ok=True)
@@ -24,6 +24,39 @@ _last: Optional[Dict[str, Any]] = None
 _last_sent: Dict[str, float] = {}
 DEDUP_SECS = 60.0
 
+_hist: Dict[str, Deque[float]] = {k: collections.deque(maxlen=20) for k in ("micRMS","lux","tds_mV","dT_tb")}
+_events: List[Dict[str, Any]] = []
+
+def _median_mad(values: List[float]) -> Optional[float]:
+    vals = [v for v in values if v is not None]
+    if not vals: return None
+    med = statistics.median(vals)
+    mad = statistics.median([abs(v - med) for v in vals])
+    return med if mad == 0 else med
+
+def _debounced(flag: bool, history: Deque[bool], hold: int = 3) -> bool:
+    history.append(flag)
+    return sum(history) >= hold
+
+def _pump_duty(events: List[Dict[str, Any]], window_s: int = 3600) -> float:
+    now = time.time()
+    recs = [e for e in events if (now - e["ts"]) <= window_s and int(e.get("rec_ms",0) or 0) > 0]
+    return sum(int(e.get("rec_ms",0) or 0) for e in recs) / 1000.0
+
+def _burst_effect(events: List[Dict[str, Any]], dt: float = 60.0, min_drop: float = 0.1) -> bool:
+    recent = [e for e in events if e.get("dT_tb") is not None]
+    if len(recent) < 2: return True
+    recent.sort(key=lambda x: x["ts"])
+    end = recent[-1]; start = [e for e in recent if end["ts"] - e["ts"] >= dt]
+    if not start: return True
+    return abs(end["dT_tb"] - start[0]["dT_tb"]) >= min_drop
+
+def _risk_band(do_val: Optional[float]) -> str:
+    if do_val is None: return "n/a"
+    if do_val < 5: return "low"
+    if do_val < 7: return "medium"
+    return "safe"
+
 def _get_webhook_url() -> str:
     return DEFAULT_WEBHOOK
 
@@ -39,20 +72,17 @@ def _append_csv(obj: Dict[str, Any]) -> None:
         w.writerow({k: obj.get(k, "") for k in CSV_FIELDS})
 
 def _append_events_csv(obj: Dict[str, Any]) -> None:
-    alert = bool(obj.get("alert", False))
-    rec_ms = int(obj.get("rec_ms", 0) or 0)
-    if alert or rec_ms > 0:
-        newfile = not EVENTS_CSV_PATH.exists()
-        with EVENTS_CSV_PATH.open("a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-            if newfile: w.writeheader()
-            w.writerow({k: obj.get(k, "") for k in CSV_FIELDS})
+    newfile = not EVENTS_CSV_PATH.exists()
+    with EVENTS_CSV_PATH.open("a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS + ["extra"])
+        if newfile: w.writeheader()
+        w.writerow({**{k: obj.get(k, "") for k in CSV_FIELDS}, "extra": obj.get("extra","")})
 
 def _coerce_types(p: Dict[str, Any]) -> Dict[str, Any]:
-    def to_float(x):
+    def to_float(x): 
         try: return float(x)
         except Exception: return None
-    def to_int(x):
+    def to_int(x): 
         try: return int(x)
         except Exception:
             fx = to_float(x); return int(fx) if fx is not None else None
@@ -62,7 +92,7 @@ def _coerce_types(p: Dict[str, Any]) -> Dict[str, Any]:
             p[b] = s in ("1","true","t","yes","y")
     for i in ("ms","rec_ms"):
         if i in p and not isinstance(p[i], int):
-            iv = to_int(p[i]);  p[i] = iv if iv is not None else p[i]
+            iv = to_int(p[i]); p[i] = iv if iv is not None else p[i]
     for f in ("tTop","tMid","tBot","dT_tb","pressure_hPa","lux","irObj","irAmb",
               "airT","airRH","tds_mV","micRMS","DOproxy","ml_conf"):
         if f in p and not isinstance(p[f], (int,float)):
@@ -116,6 +146,12 @@ def _build_embed(payload: Dict[str, Any]) -> Dict[str, Any]:
     ml_used= bool(payload.get("ml_used", False))
     title = "UBi-Guardian ALERT" if alert else ("Pump Recommendation" if rec_ms>0 else "Event")
     color = 0xE74C3C if alert else (0x2ECC71 if rec_ms>0 else 0x95A5A6)
+    duty = _pump_duty(_events)
+    eff_ok = _burst_effect(_events)
+    band = _risk_band(payload.get("DOproxy"))
+    extra = []
+    if duty > 1800: extra.append("high_duty")
+    if not eff_ok: extra.append("ineffective_burst")
     rows = [
         ("context", ctx or "n/a"),
         ("reason", reason or "none"),
@@ -123,6 +159,7 @@ def _build_embed(payload: Dict[str, Any]) -> Dict[str, Any]:
         ("pump", "ON" if payload.get("pump") else "OFF"),
         ("manual_override", "true" if payload.get("manual_override") else "false"),
         ("C* DO (mg/L)", _fmt(payload.get("DOproxy"),2)),
+        ("%DO band", band),
         ("tMid (°C)", _fmt(payload.get("tMid"),2)),
         ("dT_tb (°C)", _fmt(payload.get("dT_tb"),2)),
         ("lux", _fmt(payload.get("lux"),1)),
@@ -132,6 +169,9 @@ def _build_embed(payload: Dict[str, Any]) -> Dict[str, Any]:
         ("ml_on", "true" if ml_on else "false"),
         ("ml_pred/conf", f"{ml_pred} ({_fmt(ml_conf,3)})"),
         ("ml_used", "true" if ml_used else "false"),
+        ("pump_duty (s/hr)", _fmt(duty,1)),
+        ("efficacy_ok", str(eff_ok)),
+        ("extra", ",".join(extra) if extra else "-")
     ]
     return {
         "title": title,
@@ -155,6 +195,8 @@ async def ingest(req: Request, bg: BackgroundTasks) -> PlainTextResponse:
         payload = await req.json()
         payload["ts"] = time.time()
         payload = _coerce_types(payload)
+        for k in _hist: _hist[k].append(payload.get(k))
+        _events.append(payload)
         _append_ndjson(payload)
         _append_csv(payload)
         _append_events_csv(payload)
@@ -210,8 +252,6 @@ def alert_test() -> JSONResponse:
     _post_discord(demo)
     return JSONResponse({"ok": True})
 
-
-from fastapi.responses import FileResponse
 @app.get("/dashboard")
 def dashboard():
     return FileResponse("dashboard.html", media_type="text/html")

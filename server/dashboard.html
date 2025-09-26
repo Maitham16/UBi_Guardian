@@ -64,6 +64,10 @@
         <input id="baseUrl" placeholder="http://host:port (default: this origin)"/>
         <button class="btn" id="saveBase">Save</button>
       </div>
+      <div class="base-url">
+        <span class="muted">Charts</span>
+        <button class="btn" id="toggleFilter">Filtered</button>
+      </div>
       <button class="btn" id="btnTest">Send Test Alert</button>
       <a class="btn" id="dlTele" href="/export.csv">Export CSV</a>
       <a class="btn" id="dlEvents" href="/events.csv">Events CSV</a>
@@ -116,6 +120,10 @@
       <div class="stat"><div class="k">micRMS</div><div class="v" id="sRMS">—</div></div>
       <div class="stat"><div class="k">ML</div><div class="v" id="sML">—</div></div>
       <div class="stat"><div class="k">Pressure (hPa)</div><div class="v" id="sP">—</div></div>
+      <div class="stat"><div class="k">%DO Band</div><div class="v" id="sBand">—</div></div>
+      <div class="stat"><div class="k">Pump Duty (hr)</div><div class="v" id="sDuty">—</div></div>
+      <div class="stat"><div class="k">Efficacy</div><div class="v" id="sEff">—</div></div>
+      <div class="stat"><div class="k">Composite Gate</div><div class="v" id="sGate">—</div></div>
     </div>
   </div>
 
@@ -173,6 +181,7 @@
   const R_TO = qs('#rangeTo');
   const R_APPLY = qs('#applyRange');
   const R_INFO = qs('#rangeInfo');
+  const TOGGLE_FILTER = qs('#toggleFilter');
 
   function base(){ const v = BASE_IN.value.trim(); return v ? v.replace(/\/+$/,'') : location.origin; }
   function url(p){ return base()+p; }
@@ -223,6 +232,53 @@
   }
 
   let alertHoldUntil = 0;
+  let tele=[], events=[];
+  const NIGHT_LUX=30, GLARE_LUX=2000, OVERHEAT_UN=30;
+  function band(doVal){ if(!(Number.isFinite(doVal))) return 'n/a'; if(doVal<5) return 'low'; if(doVal<7) return 'medium'; return 'safe'; }
+
+  function pumpDutyLastHour(ev){
+    const now = Math.floor(Date.now()/1000);
+    let sum=0;
+    for(const e of ev){ const t=Number(e.ts||0), r=Number(e.rec_ms||0); if(Number.isFinite(t)&&Number.isFinite(r)&&r>0&&(now-t)<=3600) sum+=r; }
+    return sum/1000;
+  }
+
+  function lastPumpEvent(ev){
+    for(let i=ev.length-1;i>=0;i--){ const r=ev[i]; if(Number(r.rec_ms)>0) return r; }
+    return null;
+  }
+
+  function efficacyOk(e,t){
+    const pe=lastPumpEvent(e); if(!pe) return true;
+    const t0=Number(pe.ts||0), d0=Number(pe.dT_tb); if(!Number.isFinite(t0)||!Number.isFinite(d0)) return true;
+    const tEnd=t0+60;
+    let dEnd=null;
+    for(const row of t){ const tt=Number(row.ts||0); if(Number.isFinite(tt)&&tt>=tEnd){ dEnd=Number(row.dT_tb); break; } }
+    if(!Number.isFinite(dEnd)) return true;
+    return Math.abs(dEnd-d0)>=0.1;
+  }
+
+  function compositeGate(p){
+    const okDO = Number(p.DOproxy)<5;
+    const isNight = Number(p.lux)<NIGHT_LUX;
+    const mlOk = (p.ml_pred||'')!=='pump-self';
+    const noGlare = !(Number(p.lux)>=GLARE_LUX);
+    const noOver = !(Number(p.tMid)>OVERHEAT_UN);
+    return okDO && isNight && mlOk && noGlare && noOver;
+  }
+
+  function rollingMedian(arr, win){
+    const out=[]; const q=[];
+    for(let i=0;i<arr.length;i++){
+      const v=arr[i].y;
+      q.push(v);
+      if(q.length>win) q.shift();
+      const s=[...q].sort((a,b)=>a-b);
+      const m=s.length%2? s[(s.length-1)/2] : 0.5*(s[s.length/2-1]+s[s.length/2]);
+      out.push({t:arr[i].t,y:m});
+    }
+    return out;
+  }
 
   function setSnapshot(p){
     qs('#sPump').innerHTML = p.pump ? badge('ON','ok') : badge('OFF','muted');
@@ -245,6 +301,11 @@
     const ml = (p.ml_on ? `${p.ml_pred||'n/a'} (${fmtNum(p.ml_conf,3)})` : 'off') + (p.ml_used? ' [used]':'');
     qs('#sML').textContent = ml;
     qs('#sTime').textContent = p.ts ? `Last update: ${fmtTime(p.ts)}` : 'Last update: —';
+    qs('#sBand').innerHTML = band(p.DOproxy)==='low'?badge('low','bad'):band(p.DOproxy)==='medium'?badge('medium','ok'):band(p.DOproxy)==='safe'?badge('safe','ok'):'—';
+    const duty = pumpDutyLastHour(events);
+    qs('#sDuty').innerHTML = duty>1800?badge(`${fmtNum(duty,0)}s`,'bad'):badge(`${fmtNum(duty,0)}s`,'ok');
+    qs('#sEff').innerHTML = efficacyOk(events,tele)?badge('ok','ok'):badge('fail','bad');
+    qs('#sGate').innerHTML = compositeGate(p)?badge('true','ok'):badge('false','bad');
     renderSensors(p);
   }
 
@@ -327,7 +388,6 @@
     series.forEach((s,i)=>{ const x=X(s), y=Y(s); if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }); ctx.stroke();
   }
 
-  let tele=[], events=[];
   async function refreshSnapshot(){
     try{
       const p = await getJSON('/latest').catch(async ()=>{
@@ -411,10 +471,17 @@
     const teleF = filterByRange(tele);
     const evF = filterByRange(events);
     const cDo = qs('#cDo'), cR = qs('#cRms'), cL = qs('#cLux'), cT = qs('#cTds');
-    const sDo = downsample(pick(teleF,'DOproxy'), 1200);
-    const sR  = downsample(pick(teleF,'micRMS'), 1200);
-    const sLx = downsample(pick(teleF,'lux'), 1200);
-    const sTd = downsample(pick(teleF,'tds_mV'), 1200);
+    let sDo = downsample(pick(teleF,'DOproxy'), 1200);
+    let sR  = downsample(pick(teleF,'micRMS'), 1200);
+    let sLx = downsample(pick(teleF,'lux'), 1200);
+    let sTd = downsample(pick(teleF,'tds_mV'), 1200);
+    const filtered = localStorage.getItem('ubi.filter')==='1';
+    if(filtered){
+      sDo = rollingMedian(sDo,7);
+      sR  = rollingMedian(sR,7);
+      sLx = rollingMedian(sLx,7);
+      sTd = rollingMedian(sTd,7);
+    }
     const css = getComputedStyle(document.documentElement);
     drawLine(cDo, sDo, css.getPropertyValue('--lineO2').trim()||'#4ea1ff');
     drawLine(cR,  sR,  css.getPropertyValue('--lineRMS').trim()||'#a78bfa');
@@ -422,6 +489,7 @@
     drawLine(cT,  sTd, css.getPropertyValue('--lineTDS').trim()||'#f59e0b');
     renderEventsRange(evF);
     updateRangeInfo(teleF);
+    TOGGLE_FILTER.textContent = filtered ? 'Filtered' : 'Raw';
   }
 
   function updateRangeInfo(rows){
@@ -488,10 +556,16 @@
     else savePreset(v);
   });
   R_APPLY.addEventListener('click', saveCustom);
+  TOGGLE_FILTER.addEventListener('click', ()=>{
+    const cur = localStorage.getItem('ubi.filter')==='1';
+    localStorage.setItem('ubi.filter', cur?'0':'1');
+    renderAllTimeFiltered();
+  });
 
   function init(){
     const saved = localStorage.getItem('ubi.base')||''; BASE_IN.value = saved;
     if(!localStorage.getItem('ubi.range.mode')){ localStorage.setItem('ubi.range.mode','preset'); localStorage.setItem('ubi.range.preset','24h'); }
+    if(!localStorage.getItem('ubi.filter')) localStorage.setItem('ubi.filter','1');
     setRangeUI();
     applyBase();
     setInterval(refreshSnapshot, 2000);
